@@ -35,6 +35,7 @@ use warnings;
 
 my $version = "1.300";
 
+
 my %sets = (
   "open" => "noArg",
   "closed" => "noArg",
@@ -42,6 +43,8 @@ my %sets = (
   "down" => "noArg",
   "half" => "noArg",
   "stop" => "noArg",
+  "blindsOpened" => "noArg",
+  "blindsClosed" => "noArg",
   "blocked" => "noArg",
   "unblocked" => "noArg",
   "pct" => "0,10,20,30,40,50,60,70,80,90,100",
@@ -51,7 +54,7 @@ my %sets = (
 my %pcts = (
   "open" => 0,
   "closed" => 100,
-  "half" => 50);
+  "half" => 40);
 
 my %gets = (
    "version:noArg" => "V"
@@ -75,6 +78,10 @@ sub ROLLO_Initialize($) {
     . " switchTime"
     . " resetTime"
     . " reactionTime"
+  . " openBlinds"
+  . " closeBlinds"
+  . " commandCloseBlinds"
+  . " commandOpenBlinds"
     . " blockMode:blocked,force-open,force-closed,only-up,only-down,half-up,half-down,none"
     . " commandUp commandUp2 commandUp3"
     . " commandDown commandDown2 commandDown3"
@@ -141,11 +148,13 @@ sub ROLLO_Define($$) {
 	$attr{$name}{"excessBottom"} = 2;
 	$attr{$name}{"switchTime"} = 1;
 	$attr{$name}{"resetTime"} = 0;
-	$attr{$name}{"autoStop"} = 0; 													#neue Attribute sollten als default keine Änderung an der Funktionsweise bewirken.
+	$attr{$name}{"autoStop"} = 0;
+    $attr{$name}{"closeBlinds"} = 1;
+    $attr{$name}{"openBlinds"} = 0;		    													#neue Attribute sollten als default keine Änderung an der Funktionsweise bewirken.
 	$attr{$name}{"devStateIcon"} = 'open:fts_shutter_10:closed closed:fts_shutter_100:open half:fts_shutter_50:closed drive-up:fts_shutter_up@red:stop drive-down:fts_shutter_down@red:stop pct-100:fts_shutter_100:open pct-90:fts_shutter_80:closed pct-80:fts_shutter_80:closed pct-70:fts_shutter_70:closed pct-60:fts_shutter_60:closed pct-50:fts_shutter_50:closed pct-40:fts_shutter_40:open pct-30:fts_shutter_30:open pct-20:fts_shutter_20:open pct-10:fts_shutter_10:open pct-0:fts_shutter_10:closed';
 	$attr{$name}{"type"} = "normal"; 												#neue Attribute sollten als default keine Änderung an der Funktionsweise bewirken.
 #	$attr{$name}{"blockMode"} = "none";
-	$attr{$name}{"webCmd"} = "open:closed:half:stop:pct";
+	$attr{$name}{"webCmd"} = "open:closed:half:stop:pct:blindsOpened:blindsClosed";
 #	$attr{$name}{"devStateIcon"}; 													#wird jetzt abhängig von Attribut type definiert!
   return undef;
 }
@@ -171,7 +180,7 @@ sub ROLLO_Set($@) {
   my $cmd =  $a[1];
   my $arg = "";
   $arg = $a[2] if defined $a[2];
-  Log3 $name,5,"ROLLO ($name) >> Set ($cmd,$arg)" if ($cmd ne "?");
+  Log3 $name,3,"ROLLO ($name) >> Set ($cmd,$arg)" if ($cmd ne "?");
 
   my @pctsets = ("0","10","20","30","40","50","60","70","80","90","100");
 
@@ -218,6 +227,22 @@ sub ROLLO_Set($@) {
     fhem( "deletereading $name blocked");
     return;
   }
+
+ if ($cmd eq "blindsClosed"){
+   Log3 $name,3,"ROLLO ($name) >> closing...";
+   $attr{$name}{"closeBlinds"} = 1;
+   $attr{$name}{"openBlinds"} = 0;
+   ROLLO_Stop($hash);
+   return;
+ }
+ if ($cmd eq "blindsOpened"){
+   Log3 $name,3,"ROLLO ($name) >> opening...";
+   $attr{$name}{"closeBlinds"} = 0;
+   $attr{$name}{"openBlinds"} = 1;
+   ROLLO_Stop($hash);
+   return;
+ }
+
 
   my $desiredPos = $cmd;
   my $typ = AttrVal($name,"type","normal");
@@ -407,12 +432,13 @@ sub ROLLO_Stop($) {
 
   Log3 $name,4,"ROLLO ($name): stops from $state at pct $pct";
 
+
+
   #wenn autostop=1 und pct <> 0+100 und rollo fährt, dann kein stopbefehl ausführen...
   if( ($state =~ /drive-/ && $pct > 0 && $pct < 100 ) || AttrVal($name, "autoStop", 0) ne 1) {
     my $command = AttrVal($name,'commandStop',"");
     $command = AttrVal($name,'commandStopUp',"") if(defined($attr{$name}{commandStopUp}));
     $command = AttrVal($name,'commandStopDown',"") if(defined($attr{$name}{commandStopDown}) && $state eq "drive-down");
-
     # NUR WENN NICHT BEREITS EXTERN GESTOPPT
     if (ReadingsVal($name,"drive-type","undef") ne "extern") {
       fhem("$command") if ($command ne "");
@@ -424,6 +450,32 @@ sub ROLLO_Stop($) {
   } else {
     Log3 $name,4,"ROLLO ($name) drives to end pct and autostop is enabled. No stop command executed";
   }
+
+    my $openBlinds = AttrVal($name,'openBlinds',0) if(defined($attr{$name}{openBlinds}));
+    my $closeBlinds = AttrVal($name,'closeBlinds',0) if(defined($attr{$name}{closeBlinds}));
+    if( ($state eq "drive-down"  && $openBlinds == 1 && $pct > 20)) {
+      my $command = AttrVal($name,'commandOpenBlinds',"");
+      fhem("$command") if ($command ne "");
+      Log3 $name,3,"ROLLO ($name): stops from $state and blinds will be opened";
+    }
+    if( ($state eq "drive-up" && $closeBlinds == 1 && $pct > 20)) {
+        my $command = AttrVal($name,'commandCloseBlinds',"");
+        fhem("$command") if ($command ne "");
+        Log3 $name,3,"ROLLO ($name): stops from $state  and blinds will be closed";
+    }
+
+    if(!($state eq "drive-down" && $state eq "drive-up") && $openBlinds == 1 && $pct > 20){
+      my $command = AttrVal($name,'commandOpenBlinds',"");
+      fhem("$command") if ($command ne "");
+      Log3 $name,3,"ROLLO ($name): stops from $state and blinds will be opened";
+    }
+    if(!($state eq "drive-down" && $state eq "drive-up") && $closeBlinds == 1 && $pct > 20){
+      my $command = AttrVal($name,'commandCloseBlinds',"");
+      fhem("$command") if ($command ne "");
+      Log3 $name,3,"ROLLO ($name): stops from $state and blinds will be closed";
+    }
+
+
 
   if(ReadingsVal($name,"blocked","0") eq "1" && AttrVal($name,"blockMode","none") ne "none") {
     readingsSingleUpdate($hash,"state","blocked",1);
@@ -622,6 +674,12 @@ sub ROLLO_Attr(@) {
 				<li><a name="rollo_stop">
 						<code>set &lt;Rollo-Device&gt; stop</code></a><br />
 						stop a driving shutter</li>
+        <li><a name="rollo_blindsClosed">
+						<code>set &lt;Rollo-Device&gt; blindsClosed</code></a><br />
+						execute commandCloseBlinds and set attributes so that every stop command ensures blinds are Closed</li>
+        <li><a name="rollo_blindsOpened">
+            <code>set &lt;Rollo-Device&gt; blindsOpened</code></a><br />
+            execute commandOpenBlinds and set attributes so that every stop command ensures blinds are Opened</li>
 				<li><a name="rollo_blocked">
 						<code>set &lt;Rollo-Device&gt; blocked</code></a><br />
 						when activated, the shutter can moved only restricted. See attribute block_mode for further details.</li>
@@ -677,6 +735,10 @@ sub ROLLO_Attr(@) {
 					<br />command to stop a down driving shutter, if not set commandStop is executed</li>
 				<li><a name="rollo_commandStopUp"><code>attr &lt;Rollo-Device&gt; commandStopUp &lt;string&gt;</code></a>
 					<br />command to stop a up driving shutter, if not set commandStop is executed</li>
+        <li><a name="rollo_commandCloseBlinds"><code>attr &lt;Rollo-Device&gt; commandCloseBlinds &lt;string&gt;</code></a>
+					<br />command to execute after each rollo stop if blinds are supposed to be closed, if not set it is not executed</li>
+        <li><a name="rollo_commandOpenBlinds"><code>attr &lt;Rollo-Device&gt; commandOpenBlinds &lt;string&gt;</code></a>
+					<br />command to execute after each rollo stop if blinds are supposed to be open, if not set it is not executed</li>
 				<li><a name="rollo_blockMode"><code>attr &lt;Rollo-Device&gt; blockMode [blocked|force-open|force-closed|only-up|only-down|half-up|half-down|none]</code></a>
 					<br />the possibility of the shutter in blocked mode:<br>
 							blocked = shutter can't drive<br>
